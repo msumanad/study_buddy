@@ -1,0 +1,161 @@
+import os
+from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask_login import login_required, login_user, logout_user, current_user
+from werkzeug.utils import secure_filename
+
+from app import db, login_manager
+from app.models import User
+from app.services.rag_service import RAGService
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+
+def register_routes(app):
+    @app.route("/")
+    def index():
+        if current_user.is_authenticated:
+            if current_user.role == "admin":
+                return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("user_dashboard"))
+        return redirect(url_for("login"))
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if request.method == "POST":
+            username = request.form.get("username", "").strip()
+            password = request.form.get("password", "")
+            user = User.query.filter_by(username=username).first()
+
+            if not user or not user.check_password(password):
+                flash("Invalid username or password.", "danger")
+                return render_template("login.html")
+
+            login_user(user)
+            flash("Logged in successfully.", "success")
+            if user.role == "admin":
+                return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("user_dashboard"))
+
+        return render_template("login.html")
+
+    @app.route("/logout")
+    @login_required
+    def logout():
+        logout_user()
+        flash("You have been logged out.", "info")
+        return redirect(url_for("login"))
+
+    @app.route("/admin")
+    @login_required
+    def admin_dashboard():
+        if current_user.role != "admin":
+            flash("Access denied.", "danger")
+            return redirect(url_for("user_dashboard"))
+
+        rag_service = RAGService(app)
+        documents = rag_service.list_documents()
+        return render_template("admin_dashboard.html", documents=documents)
+
+    @app.route("/admin/upload", methods=["POST"])
+    @login_required
+    def upload_document():
+        if current_user.role != "admin":
+            flash("Only admins can upload files.", "danger")
+            return redirect(url_for("user_dashboard"))
+
+        file = request.files.get("file")
+        subject = request.form.get("subject", "").strip()
+
+        if not file or file.filename == "":
+            flash("Please choose a file to upload.", "danger")
+            return redirect(url_for("admin_dashboard"))
+
+        if not subject:
+            flash("Subject is required.", "danger")
+            return redirect(url_for("admin_dashboard"))
+
+        filename = secure_filename(file.filename)
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in {".pdf", ".doc", ".docx"}:
+            flash("Only PDF and document files are allowed.", "danger")
+            return redirect(url_for("admin_dashboard"))
+
+        upload_dir = app.config["UPLOAD_FOLDER"]
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, filename)
+        file.save(file_path)
+
+        try:
+            rag_service = RAGService(app)
+            rag_service.ingest_document(file_path=file_path, subject=subject, original_filename=filename, uploaded_by=current_user.id)
+            flash("Document uploaded and indexed successfully.", "success")
+        except Exception as exc:
+            flash(f"Document upload failed: {exc}", "danger")
+
+        return redirect(url_for("admin_dashboard"))
+
+    @app.route("/admin/delete/<int:document_id>", methods=["POST"])
+    @login_required
+    def delete_document(document_id):
+        if current_user.role != "admin":
+            flash("Only admins can delete files.", "danger")
+            return redirect(url_for("user_dashboard"))
+
+        # `document_id` is unused in Qdrant-only mode; form will submit filename and subject instead.
+        filename = request.form.get("filename")
+        subject = request.form.get("subject")
+        if not filename or not subject:
+            flash("Missing filename or subject for deletion.", "danger")
+            return redirect(url_for("admin_dashboard"))
+
+        rag_service = RAGService(app)
+        try:
+            rag_service.delete_document(filename=filename, subject=subject)
+            # Remove file from storage if exists
+            storage_path = os.path.join(app.config.get("UPLOAD_FOLDER"), filename)
+            if os.path.exists(storage_path):
+                os.remove(storage_path)
+            flash("Document deleted successfully.", "success")
+        except Exception as exc:
+            flash(f"Document deletion failed: {exc}", "danger")
+
+        return redirect(url_for("admin_dashboard"))
+
+    @app.route("/user")
+    @login_required
+    def user_dashboard():
+        if current_user.role != "user":
+            flash("Access denied.", "danger")
+            return redirect(url_for("admin_dashboard"))
+
+        rag_service = RAGService(app)
+        subjects = rag_service.get_subjects()
+        return render_template("user_dashboard.html", subjects=subjects)
+
+    @app.route("/user/ask", methods=["POST"])
+    @login_required
+    def ask_question():
+        if current_user.role != "user":
+            flash("Access denied.", "danger")
+            return redirect(url_for("login"))
+
+        subject = request.form.get("subject", "").strip()
+        question = request.form.get("question", "").strip()
+
+        if not subject or not question:
+            flash("Please select a subject and ask a question.", "danger")
+            return redirect(url_for("user_dashboard"))
+
+        try:
+            rag_service = RAGService(app)
+            answer = rag_service.answer_question(question=question, subject=subject)
+            flash(answer, "success")
+        except Exception as exc:
+            flash(f"Failed to answer question: {exc}", "danger")
+
+        return redirect(url_for("user_dashboard"))
+
+    return app

@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="dashboard-wrap">
+  <h2>User Dashboard</h2>
+
+  <div class="panel">
+    <h3>Ask Question</h3>
+    <form method="post" action="{{ url_for('ask_question') }}">
+      <label for="subject">Subject</label>
+      <select id="subject" name="subject" required>
+        <option value="">Select a subject</option>
+        {% for subject in subjects %}
+          <option value="{{ subject }}">{{ subject }}</option>
+        {% endfor %}
+      </select>
+
+      <label for="question">Question</label>
+      <textarea id="question" name="question" rows="5" placeholder="Ask a question about the selected subject..." required></textarea>
+
+      <button type="submit">Ask</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

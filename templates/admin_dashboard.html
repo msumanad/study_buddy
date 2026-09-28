@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="dashboard-wrap">
+  <h2>Admin Dashboard</h2>
+
+  <div class="panel">
+    <h3>Upload Document</h3>
+    <form method="post" action="{{ url_for('upload_document') }}" enctype="multipart/form-data">
+      <label for="subject">Subject</label>
+      <input id="subject" name="subject" type="text" placeholder="e.g. Biology" required />
+
+      <label for="file">File</label>
+      <input id="file" name="file" type="file" accept=".pdf,.doc,.docx" required />
+
+      <button type="submit">Upload</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>Uploaded Documents</h3>
+    {% if documents %}
+      <table>
+        <thead>
+          <tr>
+            <th>Filename</th>
+            <th>Subject</th>
+            <th>Uploaded</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for document in documents %}
+          <tr>
+            <td>{{ document.filename }}</td>
+            <td>{{ document.subject }}</td>
+            <td>-</td>
+            <td>
+              <form method="post" action="{{ url_for('delete_document', document_id=0) }}">
+                <input type="hidden" name="filename" value="{{ document.filename }}" />
+                <input type="hidden" name="subject" value="{{ document.subject }}" />
+                <button type="submit" class="danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No documents uploaded yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
