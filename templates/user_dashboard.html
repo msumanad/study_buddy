@@ -15,10 +15,24 @@
       </select>
 
       <label for="question">Question</label>
-      <textarea id="question" name="question" rows="5" placeholder="Ask a question about the selected subject..." required></textarea>
+      <textarea id="question" name="question" rows="5" placeholder="Ask a question about the selected subject..." required>{{ question or '' }}</textarea>
 
       <button type="submit">Ask</button>
     </form>
   </div>
+
+  {% if answer %}
+  <section class="panel answer-panel" aria-live="polite">
+    <h3>Response</h3>
+    <div class="qa-block">
+      <h4>Question</h4>
+      <p>{{ question }}</p>
+    </div>
+    <div class="qa-block">
+      <h4>Answer</h4>
+      <div class="answer-content">{{ answer }}</div>
+    </div>
+  </section>
+  {% endif %}
 </div>
 {% endblock %}

@@ -1,143 +1,180 @@
 # Study Buddy
 
-AI Buddy for students with role-based access, document ingestion, and a configurable RAG pipeline using LangChain, Qdrant, and PostgreSQL.
-
-## Features
-
-- Admin login for uploading and deleting documents
-- Regular user login for subject-based question answering
-- PDF and DOC/DOCX upload support
-- Document loading, chunking, embedding, vector storage, and retrieval using LangChain + Qdrant
-- Postgres for auth and app metadata only
-- Configurable LLM and embedding providers via environment variables
-- LCEL-based retrieval chain with system prompt support
+Study Buddy is a Flask application for uploading course documents and answering subject-based questions with retrieval-augmented generation (RAG). PostgreSQL stores user accounts, Qdrant stores document chunks and vectors, Hugging Face creates embeddings locally, and Groq generates answers.
 
 ## Prerequisites
 
-Before starting, make sure you have:
+- Docker Engine with the Docker Compose plugin, or Docker Desktop with Compose
+- Python 3.10 or newer
+- A Groq API key with access to the model configured in `.env`
+- Internet access the first time Hugging Face downloads the embedding model
 
-- Python 3.10+
-- PostgreSQL running locally or via Docker
-- Qdrant running locally or via Docker
-- An API key for the configured LLM provider if using OpenAI/Azure OpenAI
+The Flask application runs on the host. Docker Compose runs PostgreSQL and Qdrant.
 
-## 1) Clone and open the project
+## Setup and Run
 
-```bash
-cd /path/to/study_buddy
-```
+Run these commands from the project directory.
 
-## 2) Create the environment file
+### 1. Configure environment variables
 
-Copy the sample environment file and update the values:
+Linux or WSL:
 
 ```bash
 cp .env.example .env
 ```
 
-Then edit `.env` and set the required values such as:
+PowerShell:
 
-```env
-SECRET_KEY=your-secret-key
+```powershell
+Copy-Item .env.example .env
+```
+
+Edit `.env` and set a private `SECRET_KEY` and your Groq API key. The sample is configured for Groq and Hugging Face:
+
+```dotenv
+LLM_PROVIDER=groq
+LLM_MODEL=openai/gpt-oss-120b
+LLM_API_KEY=your-groq-api-key
+EMBEDDINGS_PROVIDER=huggingface
+EMBEDDINGS_MODEL=all-MiniLM-L6-v2
+QDRANT_VECTOR_SIZE=384
 DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/study_buddy
 QDRANT_URL=http://localhost:6333
-QDRANT_API_KEY=
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
-EMBEDDINGS_PROVIDER=openai
-EMBEDDINGS_MODEL=text-embedding-3-small
-OPENAI_API_KEY=your-openai-api-key
-UPLOAD_FOLDER=uploads
-ALLOWED_EXTENSIONS=.pdf,.doc,.docx
-DEFAULT_ADMIN_USERNAME=admin
-DEFAULT_ADMIN_PASSWORD=admin123
-DEFAULT_USER_USERNAME=user
-DEFAULT_USER_PASSWORD=user123
 ```
 
-If you use Ollama instead of OpenAI, set:
+Use a Groq model ID available to your account if the sample model is unavailable. Hugging Face downloads `all-MiniLM-L6-v2` on first use; its vectors have 384 dimensions, matching `QDRANT_VECTOR_SIZE`. Do not commit `.env` or share the API key.
 
-```env
-LLM_PROVIDER=ollama
-LLM_MODEL=llama3.1
-EMBEDDINGS_PROVIDER=ollama
-EMBEDDINGS_MODEL=nomic-embed-text
-OLLAMA_BASE_URL=http://localhost:11434
-```
-
-## 3) Start PostgreSQL and Qdrant
-
-This project includes a Docker Compose file for local services.
+### 2. Start PostgreSQL and Qdrant
 
 ```bash
-docker compose up -d
+docker compose up -d postgres qdrant
+docker compose ps
 ```
 
-This starts:
+The Compose file publishes PostgreSQL at `localhost:5432` and Qdrant at `localhost:6333`. Persistent Docker volumes keep their data between restarts.
 
-- PostgreSQL on `localhost:5432`
-- Qdrant on `localhost:6333`
+### 3. Create a virtual environment and install packages
 
-## 4) Create a Python virtual environment
+Linux or WSL:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-On Windows PowerShell:
+Windows PowerShell:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-## 5) Install dependencies
-
-```bash
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## 6) Run database initialization
-
-The app auto-creates tables on startup and seeds default users.
-
-## 7) Start the Flask app
+### 4. Run the application
 
 ```bash
 python app.py
 ```
 
-Or:
-
-```bash
-flask --app app run --debug
-```
-
-Then open:
-
-```text
-http://localhost:5000
-```
-
-## Default login users
+Open <http://localhost:5000>. On startup, the app creates the user table and seeds local default accounts if they do not already exist:
 
 - Admin: `admin` / `admin123`
 - User: `user` / `user123`
 
-## How the app works
+These defaults are for local development only. Change or remove them before exposing the application to other users.
 
-1. Admin logs in.
-2. Admin uploads a PDF or DOC/DOCX file for a subject.
-3. The file is loaded, chunked, embedded, and stored in Qdrant.
-4. User logs in and selects a subject.
-5. User asks a question.
-6. The query is embedded and compared against the subject collection in Qdrant.
-7. Relevant chunks are retrieved and passed into the LLM with a system prompt.
-8. The LLM answers based on the retrieved context.
+## Add a User
 
-## Notes
+With the virtual environment active and PostgreSQL running, open the Flask shell:
 
-- The document files are kept in the local upload folder and metadata registered in Postgres.
-- The actual document content used for retrieval lives in Qdrant.
-- The model/provider settings are controlled in `.env` for easy switching between OpenAI, Azure OpenAI, and Ollama.
+```bash
+flask --app app shell
+```
+
+At the Python prompt, create a user. The password prompt hides typed input; `User.create_user` stores a password hash.
+
+```python
+from getpass import getpass
+from app.models import User
+
+username = input("Username: ").strip()
+role = input("Role [user/admin]: ").strip() or "user"
+User.create_user(username, getpass("Password: "), role)
+```
+
+Use `user` for regular question-answering accounts or `admin` for document-management access. Usernames must be unique.
+
+## Architecture
+
+```mermaid
+flowchart LR
+	Admin[Admin] -->|Upload PDF or DOCX| Flask[Flask application]
+	Student[Student] -->|Ask question| Flask
+
+	Flask -->|Accounts and authentication| Postgres[(PostgreSQL)]
+	Flask -->|Original uploaded files| Uploads[Local uploads directory]
+
+	Flask -->|Extract and split document| Ingest[Document ingestion]
+	Ingest -->|Embed chunks| HF[Hugging Face embeddings]
+	HF -->|Vectors and metadata| Qdrant[(Qdrant)]
+
+	Flask -->|Embed question| HF
+	HF -->|Subject-filtered similarity search| Qdrant
+	Qdrant -->|Relevant chunks| Flask
+	Flask -->|Question and retrieved context| Groq[Groq LLM]
+	Groq -->|Answer| Flask
+	Flask -->|Display answer| Student
+```
+
+PostgreSQL stores authentication data. Qdrant stores chunk text, vectors, and document metadata in a shared collection, with subject metadata used to filter retrieval. Original documents remain in the local `uploads/` directory.
+
+## Request Sequence
+
+```mermaid
+sequenceDiagram
+	actor Admin
+	actor Student
+	participant Flask as Flask application
+	participant PostgreSQL
+	participant HF as Hugging Face embeddings
+	participant Qdrant
+	participant Groq as Groq LLM
+
+	Admin->>Flask: Upload document for a subject
+	Flask->>PostgreSQL: Verify admin account
+	Flask->>Flask: Save original file and split document
+	loop For each chunk
+		Flask->>HF: Embed chunk
+		HF-->>Flask: Return vector
+		Flask->>Qdrant: Store vector, text, and metadata
+	end
+
+	Student->>Flask: Submit question and subject
+	Flask->>PostgreSQL: Verify user account
+	Flask->>HF: Embed question
+	HF-->>Flask: Return query vector
+	Flask->>Qdrant: Search vectors filtered by subject
+	Qdrant-->>Flask: Return relevant chunks
+	Flask->>Groq: Generate answer from question and context
+	Groq-->>Flask: Return answer
+	Flask-->>Student: Display answer below question
+```
+
+## Common Commands
+
+Stop the containers while preserving their data:
+
+```bash
+docker compose down
+```
+
+Stop containers and delete their persisted database and vector-store data:
+
+```bash
+docker compose down -v
+```
+
+The second command permanently deletes the PostgreSQL and Qdrant data volumes.

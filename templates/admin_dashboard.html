@@ -35,9 +35,8 @@
             <td>{{ document.subject }}</td>
             <td>-</td>
             <td>
-              <form method="post" action="{{ url_for('delete_document', document_id=0) }}">
-                <input type="hidden" name="filename" value="{{ document.filename }}" />
-                <input type="hidden" name="subject" value="{{ document.subject }}" />
+              <form method="post" action="{{ url_for('delete_document') }}">
+                <input type="hidden" name="document_id" value="{{ document.document_id }}" />
                 <button type="submit" class="danger">Delete</button>
               </form>
             </td>

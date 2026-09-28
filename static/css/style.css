@@ -97,6 +97,27 @@ button.danger {
   padding: 1.5rem;
 }
 
+.answer-panel h3 {
+  margin-top: 0;
+}
+
+.qa-block + .qa-block {
+  margin-top: 1.25rem;
+}
+
+.qa-block h4 {
+  margin: 0 0 0.4rem;
+}
+
+.qa-block p {
+  margin: 0;
+}
+
+.answer-content {
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

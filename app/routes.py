@@ -1,9 +1,10 @@
 import os
+import uuid
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import login_required, login_user, logout_user, current_user
 from werkzeug.utils import secure_filename
 
-from app import db, login_manager
+from app import login_manager
 from app.models import User
 from app.services.rag_service import RAGService
 
@@ -85,7 +86,8 @@ def register_routes(app):
 
         upload_dir = app.config["UPLOAD_FOLDER"]
         os.makedirs(upload_dir, exist_ok=True)
-        file_path = os.path.join(upload_dir, filename)
+        storage_filename = f"{uuid.uuid4().hex}{ext}"
+        file_path = os.path.join(upload_dir, storage_filename)
         file.save(file_path)
 
         try:
@@ -93,32 +95,36 @@ def register_routes(app):
             rag_service.ingest_document(file_path=file_path, subject=subject, original_filename=filename, uploaded_by=current_user.id)
             flash("Document uploaded and indexed successfully.", "success")
         except Exception as exc:
+            app.logger.exception("Document upload failed for %s", filename)
+            if os.path.exists(file_path):
+                os.remove(file_path)
             flash(f"Document upload failed: {exc}", "danger")
 
         return redirect(url_for("admin_dashboard"))
 
-    @app.route("/admin/delete/<int:document_id>", methods=["POST"])
+    @app.route("/admin/delete", methods=["POST"])
     @login_required
-    def delete_document(document_id):
+    def delete_document():
         if current_user.role != "admin":
             flash("Only admins can delete files.", "danger")
             return redirect(url_for("user_dashboard"))
 
-        # `document_id` is unused in Qdrant-only mode; form will submit filename and subject instead.
-        filename = request.form.get("filename")
-        subject = request.form.get("subject")
-        if not filename or not subject:
-            flash("Missing filename or subject for deletion.", "danger")
+        document_id = request.form.get("document_id", "").strip()
+        if not document_id:
+            flash("Missing document ID for deletion.", "danger")
             return redirect(url_for("admin_dashboard"))
 
         rag_service = RAGService(app)
         try:
-            rag_service.delete_document(filename=filename, subject=subject)
-            # Remove file from storage if exists
-            storage_path = os.path.join(app.config.get("UPLOAD_FOLDER"), filename)
-            if os.path.exists(storage_path):
-                os.remove(storage_path)
-            flash("Document deleted successfully.", "success")
+            storage_filename = rag_service.delete_document(document_id=document_id)
+            if storage_filename is None:
+                flash("Document not found.", "warning")
+            else:
+                if storage_filename:
+                    storage_path = os.path.join(app.config["UPLOAD_FOLDER"], storage_filename)
+                    if os.path.exists(storage_path):
+                        os.remove(storage_path)
+                flash("Document deleted successfully.", "success")
         except Exception as exc:
             flash(f"Document deletion failed: {exc}", "danger")
 
@@ -133,7 +139,7 @@ def register_routes(app):
 
         rag_service = RAGService(app)
         subjects = rag_service.get_subjects()
-        return render_template("user_dashboard.html", subjects=subjects)
+        return render_template("user_dashboard.html", subjects=subjects, question=None, answer=None)
 
     @app.route("/user/ask", methods=["POST"])
     @login_required
@@ -152,7 +158,12 @@ def register_routes(app):
         try:
             rag_service = RAGService(app)
             answer = rag_service.answer_question(question=question, subject=subject)
-            flash(answer, "success")
+            return render_template(
+                "user_dashboard.html",
+                subjects=rag_service.get_subjects(),
+                question=question,
+                answer=answer,
+            )
         except Exception as exc:
             flash(f"Failed to answer question: {exc}", "danger")
 

@@ -1,4 +1,5 @@
 import os
+import uuid
 from typing import List
 
 from langchain_community.document_loaders import UnstructuredWordDocumentLoader, PyPDFLoader
@@ -9,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda, RunnableParallel, RunnablePassthrough
 from langchain_openai import OpenAIEmbeddings, AzureOpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_qdrant import Qdrant
+from langchain_qdrant import QdrantVectorStore
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_ollama import OllamaLLM
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
@@ -17,7 +18,6 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
 from langchain_groq import ChatGroq
 
-from app import db
 from app.config import Config
 
 
@@ -25,8 +25,14 @@ class RAGService:
     def __init__(self, app):
         self.app = app
         self.qdrant_client = self._build_qdrant_client()
-        self.embeddings = self._build_embeddings()
-        #self.llm = self._build_llm()
+        self._embeddings = None
+        self.llm = self._build_llm()
+
+    @property
+    def embeddings(self):
+        if self._embeddings is None:
+            self._embeddings = self._build_embeddings()
+        return self._embeddings
 
     def _build_qdrant_client(self):
         return QdrantClient(url=Config.QDRANT_URL, api_key=Config.QDRANT_API_KEY or None)
@@ -38,16 +44,16 @@ class RAGService:
         if provider == "huggingface":
             return HuggingFaceEmbeddings(model_name=model)
         if provider == "openai":
-            return OpenAIEmbeddings(model=model, api_key=Config.OPENAI_API_KEY)
+            return OpenAIEmbeddings(model=model, api_key=Config.EMBEDDINGS_API_KEY)
         if provider == "azure":
             return AzureOpenAIEmbeddings(
-                azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
-                api_key=Config.AZURE_OPENAI_API_KEY,
-                api_version=Config.AZURE_OPENAI_API_VERSION,
+                azure_endpoint=Config.EMBEDDINGS_ENDPOINT,
+                api_key=Config.EMBEDDINGS_API_KEY,
+                api_version=Config.EMBEDDINGS_API_VERSION,
                 model=model,
             )
         if provider == "ollama":
-            return OllamaEmbeddings(base_url=Config.OLLAMA_BASE_URL, model=model)
+            return OllamaEmbeddings(base_url=Config.EMBEDDINGS_ENDPOINT, model=model)
         raise ValueError(f"Unsupported embedding provider: {provider}")
 
     def _build_llm(self):
@@ -55,20 +61,21 @@ class RAGService:
         model = Config.LLM_MODEL
 
         if provider == "groq":
-            return ChatGroq(model=modl, api_key=Config.GROQ_API_KEY, temperature=0.3)
+            return ChatGroq(model=model, api_key=Config.LLM_API_KEY, temperature=0.3)
         if provider == "openai":
-            return ChatOpenAI(model=model, api_key=Config.OPENAI_API_KEY, temperature=0)
+            return ChatOpenAI(model=model, api_key=Config.LLM_API_KEY, temperature=0)
         if provider == "azure":
             return AzureChatOpenAI(
-                azure_endpoint=Config.AZURE_OPENAI_ENDPOINT,
-                api_key=Config.AZURE_OPENAI_API_KEY,
-                api_version=Config.AZURE_OPENAI_API_VERSION,
+                azure_endpoint=Config.LLM_ENDPOINT,
+                api_key=Config.LLM_API_KEY,
+                api_version=Config.LLM_API_VERSION,
                 azure_deployment=model,
                 temperature=0,
             )
         if provider == "ollama":
-            return OllamaLLM(model=model, base_url=Config.OLLAMA_BASE_URL, temperature=0)
+            return OllamaLLM(model=model, base_url=Config.LLM_ENDPOINT, temperature=0)
         raise ValueError(f"Unsupported LLM provider: {provider}")
+    
 
     def load_documents(self, file_path: str):
         ext = os.path.splitext(file_path)[1].lower()
@@ -92,30 +99,38 @@ class RAGService:
     def embed_documents(self, texts: List[str]):
         return self.embeddings.embed_documents(texts)
 
-    def store_documents(self, chunks, subject: str):
-        collection_name = self._get_collection_name(subject)
+    def store_documents(self, chunks):
+        collection_name = self._get_collection_name()
         self._ensure_collection(collection_name)
-        vector_store = Qdrant(
+        vector_store = QdrantVectorStore(
             client=self.qdrant_client,
             collection_name=collection_name,
-            embeddings=self.embeddings,
+            embedding=self.embeddings,
         )
 
         vector_store.add_documents(chunks)
         return collection_name
 
     def retrieve_context(self, question: str, subject: str, k: int = None):
-        collection_name = self._get_collection_name(subject)
+        collection_name = self._get_collection_name()
         if not self.qdrant_client.collection_exists(collection_name):
             return []
 
-        vector_store = Qdrant(
+        vector_store = QdrantVectorStore(
             client=self.qdrant_client,
             collection_name=collection_name,
-            embeddings=self.embeddings,
+            embedding=self.embeddings,
         )
         limit = k if k is not None else Config.RAG_TOP_K
-        return vector_store.similarity_search(question, k=limit)
+        subject_filter = qdrant_models.Filter(
+            must=[
+                qdrant_models.FieldCondition(
+                    key="metadata.subject_key",
+                    match=qdrant_models.MatchValue(value=self._subject_key(subject)),
+                )
+            ]
+        )
+        return vector_store.similarity_search(question, k=limit, filter=subject_filter)
 
     def build_rag_chain(self, subject: str, k: int = None):
         limit = k if k is not None else Config.RAG_TOP_K
@@ -144,34 +159,69 @@ class RAGService:
         return chain.invoke(question)
 
     def ingest_document(self, file_path: str, subject: str, original_filename: str, uploaded_by: int):
+        subject = " ".join(subject.split())
+        subject_key = self._subject_key(subject)
+        document_id = str(uuid.uuid4())
+        storage_filename = os.path.basename(file_path)
         loaded_docs = self.load_documents(file_path)
         split_docs = self.split_documents(loaded_docs)
 
-        metadata = {"subject": subject, "source_file": original_filename, "uploaded_by": uploaded_by}
+        metadata = {
+            "document_id": document_id,
+            "subject": subject,
+            "subject_key": subject_key,
+            "source_file": original_filename,
+            "storage_filename": storage_filename,
+            "uploaded_by": uploaded_by,
+        }
         for doc in split_docs:
             doc.metadata.update(metadata)
 
-        # Store document content and metadata in Qdrant only. We save a minimal registry
-        # in the filesystem (storage path) but do not persist a SQL record.
-        self.store_documents(split_docs, subject)
-        # Return a lightweight dict to indicate success
+        try:
+            self.store_documents(split_docs)
+        except Exception:
+            self._delete_qdrant_document(document_id)
+            raise
+
         return {
+            "document_id": document_id,
             "filename": original_filename,
             "subject": subject,
             "storage_path": file_path,
             "uploaded_by": uploaded_by,
         }
 
-    def delete_document(self, filename: str, subject: str):
-        collection_name = self._get_collection_name(subject)
+    def delete_document(self, document_id: str):
+        if not self.qdrant_client.collection_exists(self._get_collection_name()):
+            return None
+
+        document_filter = qdrant_models.Filter(
+            must=[
+                qdrant_models.FieldCondition(
+                    key="metadata.document_id",
+                    match=qdrant_models.MatchValue(value=document_id),
+                )
+            ]
+        )
+        point = next(self._scroll_points(scroll_filter=document_filter, limit=1), None)
+        if point is None:
+            return None
+
+        metadata = self._point_metadata(point)
+        storage_filename = metadata.get("storage_filename", "")
+        self._delete_qdrant_document(document_id)
+        return storage_filename
+
+    def _delete_qdrant_document(self, document_id: str):
+        collection_name = self._get_collection_name()
         if self.qdrant_client.collection_exists(collection_name):
             self.qdrant_client.delete(
                 collection_name=collection_name,
                 points_selector=qdrant_models.Filter(
                     must=[
                         qdrant_models.FieldCondition(
-                            key="source_file",
-                            match=qdrant_models.MatchValue(value=filename),
+                            key="metadata.document_id",
+                            match=qdrant_models.MatchValue(value=document_id),
                         )
                     ]
                 ),
@@ -186,64 +236,85 @@ class RAGService:
                     distance=qdrant_models.Distance.COSINE,
                 ),
             )
+        collection = self.qdrant_client.get_collection(collection_name)
+        if not collection.payload_schema or "metadata.subject_key" not in collection.payload_schema:
+            self.qdrant_client.create_payload_index(
+                collection_name=collection_name,
+                field_name="metadata.subject_key",
+                field_schema=qdrant_models.PayloadSchemaType.KEYWORD,
+            )
 
-    def _get_collection_name(self, subject: str):
-        return f"{Config.VECTOR_COLLECTION_PREFIX}_{subject.lower().replace(' ', '_')}"
+    def _get_collection_name(self):
+        return f"{Config.VECTOR_COLLECTION_PREFIX}_documents"
+
+    @staticmethod
+    def _subject_key(subject: str):
+        return " ".join(subject.split()).casefold()
+
+    @staticmethod
+    def _point_metadata(point):
+        payload = point.payload or {}
+        return payload.get("metadata", payload)
+
+    def _scroll_points(self, scroll_filter=None, limit=1000):
+        collection_name = self._get_collection_name()
+        if not self.qdrant_client.collection_exists(collection_name):
+            return
+
+        offset = None
+        while True:
+            points, offset = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=scroll_filter,
+                limit=limit,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            yield from points
+            if offset is None:
+                break
+
     def get_subjects(self):
-        # List Qdrant collections and extract subject names by prefix
-        try:
-            all_collections = [c.name for c in self.qdrant_client.get_collections().collections]
-        except Exception:
-            return []
-        prefix = f"{Config.VECTOR_COLLECTION_PREFIX}_"
-        subjects = []
-        for name in all_collections:
-            if name.startswith(prefix):
-                subj = name[len(prefix) :].replace("_", " ")
-                subjects.append(subj)
-        return sorted(subjects)
+        labels_by_key = {}
+        for document in self.list_documents():
+            subject = document["subject"]
+            labels_by_key.setdefault(self._subject_key(subject), subject)
+        return sorted(labels_by_key.values(), key=str.casefold)
 
     def list_documents(self, subject: str | None = None):
-        # Return a list of uploaded documents (filename + subject + uploaded_by) by scanning collections
-        prefix = f"{Config.VECTOR_COLLECTION_PREFIX}_"
-        collections = []
-        try:
-            all_collections = [c.name for c in self.qdrant_client.get_collections().collections]
-        except Exception:
-            return []
-
+        scroll_filter = None
         if subject:
-            coll_name = self._get_collection_name(subject)
-            if coll_name in all_collections:
-                collections = [coll_name]
-            else:
-                return []
-        else:
-            collections = [name for name in all_collections if name.startswith(prefix)]
+            scroll_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="metadata.subject_key",
+                        match=qdrant_models.MatchValue(value=self._subject_key(subject)),
+                    )
+                ]
+            )
 
-        docs = []
-        seen = set()
-        for coll in collections:
-            try:
-                resp = self.qdrant_client.scroll(collection_name=coll, limit=1000)
-                points = getattr(resp, "points", None) or getattr(resp, "result", None) or resp
-                # points may be a list of point objects or dicts
-                for p in points:
-                    payload = getattr(p, "payload", None) or p.get("payload", {}) if isinstance(p, dict) else {}
-                    filename = payload.get("source_file")
-                    if not filename:
-                        continue
-                    key = (coll, filename)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    subj = coll[len(prefix) :].replace("_", " ")
-                    docs.append({
-                        "filename": filename,
-                        "subject": subj,
-                        "uploaded_by": payload.get("uploaded_by"),
-                    })
-            except Exception:
+        documents = {}
+        for point in self._scroll_points(scroll_filter=scroll_filter):
+            metadata = self._point_metadata(point)
+            filename = metadata.get("source_file")
+            if not filename:
                 continue
 
-        return docs
+            document_id = metadata.get("document_id")
+            subject_name = metadata.get("subject", "")
+            key = document_id or (filename, subject_name)
+            documents.setdefault(
+                key,
+                {
+                    "document_id": document_id,
+                    "filename": filename,
+                    "subject": subject_name,
+                    "uploaded_by": metadata.get("uploaded_by"),
+                },
+            )
+
+        return sorted(
+            documents.values(),
+            key=lambda document: (document["subject"].casefold(), document["filename"].casefold()),
+        )
