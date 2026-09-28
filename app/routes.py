@@ -1,6 +1,6 @@
 import os
 import uuid
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import login_required, login_user, logout_user, current_user
 from werkzeug.utils import secure_filename
 
@@ -139,34 +139,26 @@ def register_routes(app):
 
         rag_service = RAGService(app)
         subjects = rag_service.get_subjects()
-        return render_template("user_dashboard.html", subjects=subjects, question=None, answer=None)
+        return render_template("user_dashboard.html", subjects=subjects)
 
     @app.route("/user/ask", methods=["POST"])
     @login_required
     def ask_question():
         if current_user.role != "user":
-            flash("Access denied.", "danger")
-            return redirect(url_for("login"))
+            return jsonify(error="Access denied."), 403
 
         subject = request.form.get("subject", "").strip()
         question = request.form.get("question", "").strip()
 
         if not subject or not question:
-            flash("Please select a subject and ask a question.", "danger")
-            return redirect(url_for("user_dashboard"))
+            return jsonify(error="Please select a subject and enter a question."), 400
 
         try:
             rag_service = RAGService(app)
             answer = rag_service.answer_question(question=question, subject=subject)
-            return render_template(
-                "user_dashboard.html",
-                subjects=rag_service.get_subjects(),
-                question=question,
-                answer=answer,
-            )
-        except Exception as exc:
-            flash(f"Failed to answer question: {exc}", "danger")
-
-        return redirect(url_for("user_dashboard"))
+            return jsonify(subject=subject, question=question, answer=answer)
+        except Exception:
+            app.logger.exception("Question answering failed for user %s", current_user.id)
+            return jsonify(error="Unable to answer right now. Please try again."), 500
 
     return app

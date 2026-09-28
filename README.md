@@ -1,6 +1,6 @@
 # Study Buddy
 
-Study Buddy is a Flask application for uploading course documents and answering subject-based questions with retrieval-augmented generation (RAG). PostgreSQL stores user accounts, Qdrant stores document chunks and vectors, Hugging Face creates embeddings locally, and Groq generates answers.
+Study Buddy is a Flask application for uploading course documents and answering subject-based questions with retrieval-augmented generation (RAG). PostgreSQL stores user accounts, Qdrant stores document chunks and vectors, Hugging Face creates embeddings locally, and Groq generates answers. Q&A history remains in the browser page and is cleared when the page is reloaded.
 
 ## Prerequisites
 
@@ -112,24 +112,26 @@ Use `user` for regular question-answering accounts or `admin` for document-manag
 ```mermaid
 flowchart LR
 	Admin[Admin] -->|Upload PDF or DOCX| Flask[Flask application]
-	Student[Student] -->|Ask question| Flask
+	Student[Student] --> Browser[Browser page]
+	Browser -->|Question via fetch| Flask
 
 	Flask -->|Accounts and authentication| Postgres[(PostgreSQL)]
 	Flask -->|Original uploaded files| Uploads[Local uploads directory]
 
 	Flask -->|Extract and split document| Ingest[Document ingestion]
-	Ingest -->|Embed chunks| HF[Hugging Face embeddings]
-	HF -->|Vectors and metadata| Qdrant[(Qdrant)]
+	Ingest -->|Embed chunks| Embeddings[Embedding model]
+	Embeddings -->|Vectors and metadata| Qdrant[(Qdrant)]
 
-	Flask -->|Embed question| HF
-	HF -->|Subject-filtered similarity search| Qdrant
+	Flask -->|Embed question| Embeddings
+	Embeddings -->|Subject-filtered similarity search| Qdrant
 	Qdrant -->|Relevant chunks| Flask
-	Flask -->|Question and retrieved context| Groq[Groq LLM]
-	Groq -->|Answer| Flask
-	Flask -->|Display answer| Student
+	Flask -->|Question and retrieved context| LLM[Language model]
+	LLM -->|Answer| Flask
+	Flask -->|Return answer as JSON| Browser
+	Browser -->|Append Q&A to current page| Student
 ```
 
-PostgreSQL stores authentication data. Qdrant stores chunk text, vectors, and document metadata in a shared collection, with subject metadata used to filter retrieval. Original documents remain in the local `uploads/` directory.
+PostgreSQL stores authentication data. Qdrant stores chunk text, vectors, and document metadata in a shared collection, with subject metadata used to filter retrieval. Original documents remain in the local `uploads/` directory. The browser sends questions with `fetch` and keeps returned Q&A entries in the current page only; reloading the page clears that history.
 
 ## Request Sequence
 
@@ -137,30 +139,34 @@ PostgreSQL stores authentication data. Qdrant stores chunk text, vectors, and do
 sequenceDiagram
 	actor Admin
 	actor Student
+	participant Browser as Browser page
 	participant Flask as Flask application
 	participant PostgreSQL
-	participant HF as Hugging Face embeddings
+	participant Embeddings as Embedding model
 	participant Qdrant
-	participant Groq as Groq LLM
+	participant LLM as Language model
 
 	Admin->>Flask: Upload document for a subject
 	Flask->>PostgreSQL: Verify admin account
 	Flask->>Flask: Save original file and split document
 	loop For each chunk
-		Flask->>HF: Embed chunk
-		HF-->>Flask: Return vector
+		Flask->>Embeddings: Embed chunk
+		Embeddings-->>Flask: Return vector
 		Flask->>Qdrant: Store vector, text, and metadata
 	end
 
-	Student->>Flask: Submit question and subject
+	Student->>Browser: Enter question and subject
+	Browser->>Flask: POST question using fetch
 	Flask->>PostgreSQL: Verify user account
-	Flask->>HF: Embed question
-	HF-->>Flask: Return query vector
+	Flask->>Embeddings: Embed question
+	Embeddings-->>Flask: Return query vector
 	Flask->>Qdrant: Search vectors filtered by subject
 	Qdrant-->>Flask: Return relevant chunks
-	Flask->>Groq: Generate answer from question and context
-	Groq-->>Flask: Return answer
-	Flask-->>Student: Display answer below question
+	Flask->>LLM: Generate answer from question and context
+	LLM-->>Flask: Return answer
+	Flask-->>Browser: Return answer as JSON
+	Browser->>Browser: Append Q&A to current page
+	Browser-->>Student: Display response and Ask more button
 ```
 
 ## Common Commands

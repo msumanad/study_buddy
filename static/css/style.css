@@ -101,6 +101,32 @@ button.danger {
   margin-top: 0;
 }
 
+.conversation-history {
+  display: grid;
+  gap: 1rem;
+}
+
+.conversation-history[hidden],
+.button-link[hidden] {
+  display: none;
+}
+
+.conversation-history > h3 {
+  margin: 0;
+}
+
+#conversation-entries {
+  display: grid;
+  gap: 1rem;
+}
+
+.conversation-subject {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: bold;
+}
+
 .qa-block + .qa-block {
   margin-top: 1.25rem;
 }
@@ -115,7 +141,24 @@ button.danger {
 
 .answer-content {
   line-height: 1.6;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.button-link {
+  justify-self: start;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  border: 0;
+  background: var(--primary);
+  color: white;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.button-link:hover,
+.button-link:focus-visible {
+  background: var(--primary-dark);
 }
 
 table {

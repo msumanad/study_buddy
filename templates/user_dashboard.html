@@ -3,36 +3,30 @@
 <div class="dashboard-wrap">
   <h2>User Dashboard</h2>
 
-  <div class="panel">
+  <div class="panel" id="ask-question">
     <h3>Ask Question</h3>
-    <form method="post" action="{{ url_for('ask_question') }}">
+    <form id="question-form" method="post" action="{{ url_for('ask_question') }}">
       <label for="subject">Subject</label>
       <select id="subject" name="subject" required>
         <option value="">Select a subject</option>
         {% for subject in subjects %}
-          <option value="{{ subject }}">{{ subject }}</option>
+          <option value="{{ subject }}" {% if subject == selected_subject %}selected{% endif %}>{{ subject }}</option>
         {% endfor %}
       </select>
 
       <label for="question">Question</label>
-      <textarea id="question" name="question" rows="5" placeholder="Ask a question about the selected subject..." required>{{ question or '' }}</textarea>
+      <textarea id="question" name="question" rows="5" placeholder="Ask a question about the selected subject..." required></textarea>
 
       <button type="submit">Ask</button>
     </form>
+    <p id="question-status" role="status" aria-live="polite"></p>
   </div>
 
-  {% if answer %}
-  <section class="panel answer-panel" aria-live="polite">
-    <h3>Response</h3>
-    <div class="qa-block">
-      <h4>Question</h4>
-      <p>{{ question }}</p>
-    </div>
-    <div class="qa-block">
-      <h4>Answer</h4>
-      <div class="answer-content">{{ answer }}</div>
-    </div>
+  <section id="conversation-history" class="conversation-history" aria-label="Conversation history" hidden>
+    <h3>Conversation history</h3>
+    <div id="conversation-entries"></div>
+    <button id="ask-more" class="button-link" type="button" hidden>Ask more</button>
   </section>
-  {% endif %}
 </div>
+<script src="{{ url_for('static', filename='user_dashboard.js') }}" defer></script>
 {% endblock %}
