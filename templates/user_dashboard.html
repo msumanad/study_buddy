@@ -3,9 +3,14 @@
 <div class="dashboard-wrap">
   <h2>User Dashboard</h2>
 
+  <section id="conversation-history" class="conversation-history" aria-label="Conversation history" hidden>
+    <h3>Conversation</h3>
+    <div id="conversation-entries" aria-live="polite"></div>
+  </section>
+
   <div class="panel" id="ask-question">
-    <h3>Ask Question</h3>
-    <form id="question-form" method="post" action="{{ url_for('ask_question') }}">
+    <h3>Ask a question</h3>
+    <form id="question-form" data-user-id="{{ current_user.id }}" method="post" action="{{ url_for('ask_question') }}">
       <label for="subject">Subject</label>
       <select id="subject" name="subject" required>
         <option value="">Select a subject</option>
@@ -21,12 +26,6 @@
     </form>
     <p id="question-status" role="status" aria-live="polite"></p>
   </div>
-
-  <section id="conversation-history" class="conversation-history" aria-label="Conversation history" hidden>
-    <h3>Conversation history</h3>
-    <div id="conversation-entries"></div>
-    <button id="ask-more" class="button-link" type="button" hidden>Ask more</button>
-  </section>
 </div>
 <script src="{{ url_for('static', filename='user_dashboard.js') }}" defer></script>
 {% endblock %}
